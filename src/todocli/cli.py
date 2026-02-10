@@ -146,6 +146,25 @@ def delete(
     console.print(f"[dim]- {escape(task.text)} removed[/dim]")
 
 
+@app.command()
+def web(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind address"),
+    port: int = typer.Option(5000, "--port", "-p", help="Port number"),
+    debug: bool = typer.Option(False, "--debug", help="Enable Flask debug mode"),
+):
+    """Start the web UI (requires: pip install todocli[web])."""
+    try:
+        from todocli.web import run_server
+    except ImportError:
+        console.print(
+            "[red]Flask is not installed.[/red]\n"
+            "Install with: [bold]pip install todocli\\[web][/bold]"
+        )
+        raise typer.Exit(code=1)
+    console.print(f"[green]Starting web UI at http://{host}:{port}[/green]")
+    run_server(host=host, port=port, debug=debug)
+
+
 def _list_tasks(context: Optional[str] = None, show_all: bool = False) -> None:
     """Render the task list as a Rich table."""
     db = _get_db()
