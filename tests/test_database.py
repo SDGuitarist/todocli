@@ -1,4 +1,9 @@
+import os
+import time
+from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 from todocli.database import Database
 
@@ -154,3 +159,92 @@ def test_redone_does_not_inflate_count(tmp_path: Path):
     db.mark_done(task.id)
     db.mark_done(task.id)  # returns None, no double-count
     assert db.count_done_today() == 1
+
+
+@pytest.fixture
+def pacific_local_tz():
+    """Make the machine's local timezone US/Pacific for one test, then restore."""
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset() not available on this platform")
+    original = os.environ.get("TZ")
+    os.environ["TZ"] = "America/Los_Angeles"
+    time.tzset()
+    try:
+        yield
+    finally:
+        if original is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original
+        time.tzset()
+
+
+def _freeze_now(monkeypatch, instant: datetime) -> None:
+    """Make todocli.database see `instant` as the current time."""
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant
+
+    monkeypatch.setattr("todocli.database.datetime", FrozenDatetime)
+
+
+def _add_completed(db: Database, text: str, done_at: str) -> None:
+    """Add a task and store an explicit done_at (mark_done uses the wall clock)."""
+    task = db.add_task(text)
+    tasks = db.load()
+    for t in tasks:
+        if t.id == task.id:
+            t.done = True
+            t.done_at = done_at
+    db.save(tasks)
+
+
+def test_count_done_today_uses_local_day_for_evening_completion(
+    tmp_path: Path, pacific_local_tz, monkeypatch
+):
+    # "Now" 2026-10-13T02:00Z is Oct 12, 7 PM in Los Angeles.
+    _freeze_now(monkeypatch, datetime(2026, 10, 13, 2, 0, tzinfo=timezone.utc))
+    db = Database(path=tmp_path / "tasks.json")
+    # Completed Oct 12, 10 AM local: still "today" locally.
+    _add_completed(db, "Evening task", "2026-10-12T17:00:00+00:00")
+    assert db.count_done_today() == 1
+
+
+def test_count_done_today_excludes_previous_local_evening(
+    tmp_path: Path, pacific_local_tz, monkeypatch
+):
+    # "Now" 2026-10-13T15:00Z is Oct 13, 8 AM in Los Angeles.
+    _freeze_now(monkeypatch, datetime(2026, 10, 13, 15, 0, tzinfo=timezone.utc))
+    db = Database(path=tmp_path / "tasks.json")
+    # Completed Oct 12, 8 PM local: same UTC date as "now" but not today locally.
+    _add_completed(db, "Last night", "2026-10-13T03:00:00+00:00")
+    assert db.count_done_today() == 0
+
+
+def test_count_done_today_handles_dst_fallback(
+    tmp_path: Path, pacific_local_tz, monkeypatch
+):
+    # US Pacific falls back on 2026-11-01, so Nov 1 is a 25-hour local day and
+    # the UTC offset differs between its start (PDT, -7) and end (PST, -8).
+    # "Now" 2026-11-02T07:30Z is Nov 1, 11:30 PM PST (offset -8).
+    _freeze_now(monkeypatch, datetime(2026, 11, 2, 7, 30, tzinfo=timezone.utc))
+    db = Database(path=tmp_path / "tasks.json")
+    # 07:30Z Nov 1 is 12:30 AM PDT (offset -7): today. Using "now"'s offset
+    # (-8) would wrongly place it on Oct 31, and its UTC date is not today's.
+    _add_completed(db, "After local midnight", "2026-11-01T07:30:00+00:00")
+    # 06:30Z Nov 1 is 11:30 PM PDT on Oct 31: not today.
+    _add_completed(db, "Before local midnight", "2026-11-01T06:30:00+00:00")
+    assert db.count_done_today() == 1
+
+
+def test_count_done_today_treats_naive_timestamp_as_utc(
+    tmp_path: Path, pacific_local_tz, monkeypatch
+):
+    # Now is Oct 13, 8 AM local. A naive done_at has no offset; it is read as
+    # UTC, i.e. Oct 12, 8 PM local, so it is not today.
+    _freeze_now(monkeypatch, datetime(2026, 10, 13, 15, 0, tzinfo=timezone.utc))
+    db = Database(path=tmp_path / "tasks.json")
+    _add_completed(db, "Legacy timestamp", "2026-10-13T03:00:00")
+    assert db.count_done_today() == 0
