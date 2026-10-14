@@ -73,14 +73,21 @@ class Database:
         return active
 
     def count_done_today(self) -> int:
-        """Count tasks completed today (for celebration counter)."""
+        """Count tasks completed today (for celebration counter).
+
+        "Today" is the user's local calendar day: stored timestamps are
+        timezone-aware UTC and are converted to local time before comparing.
+        """
         tasks = self.load()
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now().astimezone().date()
         count = 0
         for t in tasks:
             if t.done and t.done_at:
-                done_date = datetime.fromisoformat(t.done_at).date()
-                if done_date == today:
+                done = datetime.fromisoformat(t.done_at)
+                if done.tzinfo is None:
+                    # Legacy/offset-less value: treat as UTC, as before.
+                    done = done.replace(tzinfo=timezone.utc)
+                if done.astimezone().date() == today:
                     count += 1
         return count
 
