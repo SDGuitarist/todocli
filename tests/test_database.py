@@ -226,14 +226,16 @@ def test_count_done_today_excludes_previous_local_evening(
 def test_count_done_today_handles_dst_fallback(
     tmp_path: Path, pacific_local_tz, monkeypatch
 ):
-    # US Pacific falls back on 2026-11-01. "Now" 08:01Z is 01:01 AM PDT, still
-    # before the switch, but already Nov 1 locally.
-    _freeze_now(monkeypatch, datetime(2026, 11, 1, 8, 1, tzinfo=timezone.utc))
+    # US Pacific falls back on 2026-11-01, so Nov 1 is a 25-hour local day and
+    # the UTC offset differs between its start (PDT, -7) and end (PST, -8).
+    # "Now" 2026-11-02T07:30Z is Nov 1, 11:30 PM PST (offset -8).
+    _freeze_now(monkeypatch, datetime(2026, 11, 2, 7, 30, tzinfo=timezone.utc))
     db = Database(path=tmp_path / "tasks.json")
-    # 07:00Z is midnight Nov 1 PDT -> today.
-    _add_completed(db, "After local midnight", "2026-11-01T07:00:00+00:00")
-    # 06:00Z is Oct 31, 11 PM PDT -> not today.
-    _add_completed(db, "Before local midnight", "2026-10-31T06:00:00+00:00")
+    # 07:30Z Nov 1 is 12:30 AM PDT (offset -7): today. Using "now"'s offset
+    # (-8) would wrongly place it on Oct 31, and its UTC date is not today's.
+    _add_completed(db, "After local midnight", "2026-11-01T07:30:00+00:00")
+    # 06:30Z Nov 1 is 11:30 PM PDT on Oct 31: not today.
+    _add_completed(db, "Before local midnight", "2026-11-01T06:30:00+00:00")
     assert db.count_done_today() == 1
 
 
